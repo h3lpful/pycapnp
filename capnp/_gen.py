@@ -4,7 +4,8 @@ import sys
 from jinja2 import Environment, PackageLoader
 
 import capnp
-import schema_capnp
+from capnp import schema_capnp
+# import schema_capnp
 
 
 def find_type(code, id):
@@ -14,15 +15,14 @@ def find_type(code, id):
 
     return None
 
-
-def main():
+def parse_main():
     env = Environment(loader=PackageLoader("capnp", "templates"))
     env.filters["format_name"] = lambda name: name[name.find(":") + 1 :]
 
     code = schema_capnp.CodeGeneratorRequest.read(sys.stdin)
     code = code.to_dict()
     code["nodes"] = [
-        node for node in code["nodes"] if "struct" in node and node["scopeId"] != 0
+        node for node in code["nodes"] if "struct" in node or "enum" in node and node["scopeId"] != 0
     ]
     for node in code["nodes"]:
         displayName = node["displayName"]
@@ -38,23 +38,56 @@ def main():
         )
         node["schema"] = "_{}_Schema".format(node["module_name"])
         is_union = False
-        for field in node["struct"]["fields"]:
-            if field["discriminantValue"] != 65535:
-                is_union = True
-            field["c_name"] = field["name"][0].upper() + field["name"][1:]
-            if "slot" in field:
-                field["type"] = list(field["slot"]["type"].keys())[0]
-                if not isinstance(field["slot"]["type"][field["type"]], dict):
-                    continue
-                sub_type = field["slot"]["type"][field["type"]].get("typeId", None)
-                if sub_type:
-                    field["sub_type"] = find_type(code, sub_type)
-                sub_type = field["slot"]["type"][field["type"]].get("elementType", None)
-                if sub_type:
-                    field["sub_type"] = sub_type
-            else:
-                field["type"] = find_type(code, field["group"]["typeId"])
+        if "enum" in node:
+            node["type"] = "enum"
+            # node["c_name"] = node["name"][0].upper() + node["name"][1:]
+            for enumerant in node["enum"]["enumerants"]:
+                enumerant["name"] = enumerant["name"].upper()
+        elif "struct" in node:
+            node["type"] = "struct"
+            for field in node["struct"]["fields"]:
+                if field["discriminantValue"] != 65535:
+                    is_union = True
+                field["c_name"] = field["name"][0].upper() + field["name"][1:]
+                if "slot" in field:
+                    field["type"] = list(field["slot"]["type"].keys())[0]
+                    if not isinstance(field["slot"]["type"][field["type"]], dict):
+                        continue
+                    sub_type = field["slot"]["type"][field["type"]].get("typeId", None)
+                    if sub_type:
+                        field["sub_type"] = find_type(code, sub_type)
+                    sub_type = field["slot"]["type"][field["type"]].get("elementType", None)
+                    if sub_type:
+                        field["sub_type"] = sub_type
+                else:
+                    field["type"] = find_type(code, field["group"]["typeId"])
         node["is_union"] = is_union
+    print(code)
+    return env, code
+
+def main_python():
+    env, code = parse_main()
+
+    include_dir = os.path.abspath(os.path.join(os.path.dirname(capnp.__file__), ".."))
+    module = env.get_template("module.py")
+
+    for f in code["requestedFiles"]:
+        filename = f["filename"].replace('.capnp', '.py')
+
+        file_code = dict(code)
+        file_code["nodes"] = [
+            node
+            for node in file_code["nodes"]
+            if node["displayName"].startswith(f["filename"])
+        ]
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, "w") as out:
+            out.write(module.render(code=file_code, file=f, include_dir=include_dir))
+
+    
+
+def main():
+    env, code = parse_main()
 
     include_dir = os.path.abspath(os.path.join(os.path.dirname(capnp.__file__), ".."))
     module = env.get_template("module.pyx")

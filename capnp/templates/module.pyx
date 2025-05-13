@@ -108,7 +108,7 @@ cpdef _set_{{field.name}}(self, value):
 {%- endmacro %}
 
 import capnp
-import {{file.filename | replace('.', '_')}}
+import {{file.filename | replace('.', '_') | replace('/', '.')}}
 
 from capnp.includes.types cimport *
 from capnp cimport helpers
@@ -162,7 +162,7 @@ cdef extern from "{{file.filename}}.h":
 {%- for node in code.nodes %}
 
 {{node.schema}} = _Schema()._init(get{{node.module_name}}Schema()).as_struct()
-{{node.module_path}}.schema = {{node.schema}}
+{{node.module_path | replace('/', '.')}}.schema = {{node.schema}}
 
 cdef class {{node.module_name}}_Reader(_DynamicStructReader):
     cdef {{node.module_name}}.Reader thisptr_child
